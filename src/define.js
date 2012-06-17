@@ -2,7 +2,7 @@
  * define.js
  * 
  * Dependencies:
- *     load.js
+ *     jQuery >= v1.5
  *     
  * Defining a module:
  *     define(name, module) - defines a named module without dependencies. 
@@ -10,6 +10,7 @@
  *     define(require, module) - defines an anonymous module. 
  *     define(name, path) - defines path(s) to load for an async module.
  *     define(object) - sets config options and module definitions.
+ *     - all methods return a module object except for the last one.
  *
  *     Parameter descriptions:
  *         name - The name of the module.
@@ -67,9 +68,9 @@
  *
  * If the define symbol is already defined call define.noConflict() to re-assign it and return this define.
  */
- (function ($) {
+ (function ($, undefined) {
 
- 	var define, _, _define;
+ 	var define, _, Module, _define;
 	
 	define = function (name, require, module) {
 		/// <summary>
@@ -97,15 +98,14 @@
 					define(name, module);
 				}
 			});
-			
-			return;
+
+			return undefined;
 		}
 
 		if ($.isArray(arguments[0])) {
 			
-			// define(require, module) - no name - load module now
-			_.require(arguments[0], arguments[1]);
-			return;
+			// define(require, module) - anonymous module
+			return new Module({ require: arguments[0], module: arguments[1] });
 		}
 
 		moduleDefinition = { };
@@ -128,15 +128,16 @@
 		// undocumented way to delete a module
 		if (moduleDefinition.module === null) {
 			delete _.modules[moduleDefinition.name];
-			return;
+			return undefined;
 		}
 
 		// guard against module duplication
 		if (_.modules[moduleDefinition.name] && _.modules[moduleDefinition.name].module) {
-			$.error("Duplicate module definition. Module name: " + moduleDefinition.name);
+			throw ("Duplicate module definition. Module name: " + moduleDefinition.name);
 		}
 
-		_.modules[moduleDefinition.name] = moduleDefinition;
+		_.modules[moduleDefinition.name] = new Module(moduleDefinition);
+		return _.modules[moduleDefinition.name];
 	};
 	
 	// add static methods
@@ -169,7 +170,7 @@
 			baseUrl: "",
 			alias: {},
 			load:  function (resources, resolve, reject) {
-				$.error("load must be set in the config options. Resources to load: " + resources);
+				throw ("load must be set in the config options. Resources to load: " + resources);
 			}
 		},
 		
@@ -222,73 +223,110 @@
 		isModuleName: function (name) {
 			/// <summary>Returns true if a valid module name. If false, it is a path to load.</summary>
 			return !_.pathTestPattern.test(name);
-		},
-		
-		require: function (require, callback) {
-			var modules = {};	// a hash of modules used to pass back to the module that is being created
-			var toLoad = [];	// scripts to load
-			var dfds = [];		// an array of deferreds to know when all dependencies have been loaded
+		}
+	};
 
-			require = $.isArray(require) ? require : [require];
 
-			$.each(require, function (index, dependency) {
+
+ 	Module = function (module) {
+ 		
+ 		$.extend(this, module);
+ 		
+		if (!this.name) { // load anonymous modules during creation
+			this.load();
+		}
+  	};
+
+ 	Module.prototype = {
+ 		name: null,			// the module name
+ 		require: [],		// the array of dependencies (module names or load paths).
+ 		module: null,		// the module object or function to be called to retrieve the module instance
+ 		instance: false,	// the module instance (result of the module property) - false means we need to load the require dependencies.
+ 		
+		load: function () {
+ 			var loadDfd,			// the deferred that this method returns - the then/done callback passes this module as an argument.
+ 			    requiredInstances,	// a hash of modules used to pass back to the module that is being created
+ 			    toLoad,				// scripts to load async
+ 			    dfds,				// an array of deferreds used to load the dependencies
+				self;
+
+			self = this;
+ 			loadDfd = new $.Deferred();
+
+			// check if we are already loaded
+			if (this.instance !== false) {
+				loadDfd.resolve(self);
+				return loadDfd;
+			}
+ 			
+
+			toLoad = [];
+			dfds = [];
+			requiredInstances = { };
+			this.require = $.isArray(this.require) ? this.require : [this.require];
+			
+
+			// load all dependencies
+			$.each(this.require, function (index, dependency) {
 				var module, dfd;
 
 				dependency = dependency.toLowerCase();
 
 				// if not a script file, load the module
 				if (_.isModuleName(dependency)) {
+					
 					module = _.modules[dependency];
 					if (!module) {
-						$.error("Required module is not registered. Module name: " + dependency);
+						throw ("A required module is not registered - module name: " + dependency);
 					}
-					
-					if (module.instance) {
 
-						modules[dependency] = module.instance;
-
-					} else {
-
-						dfd = new $.Deferred();
-						dfds.push(dfd);
-						
-						_.require(module.require || [], function () {
-							
-							// create the module
-							module = _.modules[module.name]; // jch*** testing
-							var instance = $.isFunction(module.module) ?
-								module.module.apply(module, arguments) :
-								module.module;
-
-							module.instance = instance;
-							modules[dependency] = module.instance;
-							dfd.resolve();
-						});
-					}
+					dfd = new $.Deferred();
+					module.load().then(function (loadedModule) {
+						requiredInstances[loadedModule.name] = loadedModule.instance;
+						dfd.resolve();
+					});
+					dfds.push(dfd); 
+			
 				} else {
+					
 					toLoad.push(dependency);
 				}
 			});
 
 			// load any scripts to load then call the callback with the loaded modules
 			toLoad.length > 0 && dfds.push(_.load(toLoad));
-			
-			$.when.apply($, dfds).then(function () {
-				var orderedModules = [];
 
-				$.each(require, function (index, dependency) {
-					dependency = dependency.toLowerCase();
-					modules[dependency] && orderedModules.push(modules[dependency]);
-				});
+			$.when.apply($, dfds).then(function () {
+				var asyncModule, orderedModules;
+					
+				orderedModules = [];
 				
-				callback.apply(null, orderedModules);
+				$.each(self.require, function (index, dependency) {
+					dependency = dependency.toLowerCase();
+					requiredInstances[dependency] && orderedModules.push(requiredInstances[dependency]);
+				});
+
+				self.instance = $.isFunction(self.module) ?
+					self.module.apply(self.module, orderedModules) :
+					self.module;
+				
+				if (self.module === null && toLoad.length > 0) {
+					asyncModule = _.modules[self.name];
+					asyncModule.load().then(function () {
+						loadDfd.resolve(asyncModule);
+					});
+				} else {
+					loadDfd.resolve(self);
+				}
 			
 			}).fail(function (msg) {
-				msg = msg || "Definition failed.";
-				$.error(msg);
+				throw msg || "Definition failed.";
 			});
-		}
-	};
+			
+
+ 			return loadDfd;
+ 		}
+ 	};
 
 	_define = window.define;
 	window.define = define;

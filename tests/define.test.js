@@ -68,7 +68,7 @@
 		define.config({
 			load: function (resources, resolve, reject) {
 				QUnit.equal(resources[0], resourcePath);
-				
+
 				define("testmodule", { prop1: "val1" });
 				resolve();
 			}
