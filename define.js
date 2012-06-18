@@ -89,13 +89,13 @@
 				define.config(defineObj.config);
 				delete defineObj.config;
 			}
-
-			$.each(defineObj, function (name, module) {
+		
+			$.each(defineObj, function (moduleName, moduleOrRequire) {
 				// test if mod is a plain object with require/define properties
-				if (module && module.require && module.define) {
-					define(name, module.require, module.define);
+				if (moduleOrRequire && moduleOrRequire.require && moduleOrRequire.define) {
+					define(moduleName, moduleOrRequire.require, moduleOrRequire.define);
 				} else {
-					define(name, module);
+					define(moduleName, moduleOrRequire);
 				}
 			});
 
@@ -194,20 +194,23 @@
 			return dfd;
 		},
 		
-		parseLoadAlias: function (path) {
+		parseLoadAlias: function (path, unusedAliases) {
 			/// <summary>Replaces aliases and adds the baseUrl.</summary>
-			var parts, alias;
+			var parts, alias, token;
 			
 			if (_.isAbsolutePath(path)) {
 				return path;
 			}
 
+			unusedAliases = unusedAliases || _.config.alias;
 			parts = path.split("/");
-			alias = _.config.alias[parts[0]];
+			token = parts[0];
+			alias = unusedAliases[token];
 			if (alias) {
 				parts[0] = alias;
 				path = parts.join("/").replace("//", "/");
-				return _.parseLoadAlias(path);
+				delete unusedAliases[token];
+				return _.parseLoadAlias(path, unusedAliases);
 			}
 			
 			return _.config.baseUrl + path;
@@ -244,22 +247,19 @@
  		instance: false,	// the module instance (result of the module property) - false means we need to load the require dependencies.
  		
 		load: function () {
- 			var loadDfd,			// the deferred that this method returns - the then/done callback passes this module as an argument.
- 			    requiredInstances,	// a hash of modules used to pass back to the module that is being created
+ 			var requiredInstances,	// a hash of modules used to pass back to the module that is being created
  			    toLoad,				// scripts to load async
  			    dfds,				// an array of deferreds used to load the dependencies
 				self;
 
 			self = this;
- 			loadDfd = new $.Deferred();
-
-			// check if we are already loaded
-			if (this.instance !== false) {
-				loadDfd.resolve(self);
-				return loadDfd;
-			}
  			
-
+			// check if we are already loaded
+			if (self.deferred !== undefined) {
+				return self.deferred;
+			}
+			
+			self.deferred = new $.Deferred();
 			toLoad = [];
 			dfds = [];
 			requiredInstances = { };
@@ -313,10 +313,10 @@
 				if (self.module === null && toLoad.length > 0) {
 					asyncModule = _.modules[self.name];
 					asyncModule.load().then(function () {
-						loadDfd.resolve(asyncModule);
+						self.deferred.resolve(asyncModule);
 					});
 				} else {
-					loadDfd.resolve(self);
+					self.deferred.resolve(self);
 				}
 			
 			}).fail(function (msg) {
@@ -324,7 +324,7 @@
 			});
 			
 
- 			return loadDfd;
+ 			return self.deferred;
  		}
  	};
 
