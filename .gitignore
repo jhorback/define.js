@@ -1,0 +1,5 @@
+# git ignore file
+WebWorkbench.mswwsettings
+_Resharper.define.js
+define.js.sln.docstates.suo
+define.js.suo
